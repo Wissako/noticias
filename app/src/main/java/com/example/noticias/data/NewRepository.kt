@@ -8,41 +8,51 @@ class NewsRepository(
     private val apiService: NewsApiService,
     private val noticiaDao: NoticiaDao
 ) {
-    suspend fun obtenerNoticias(apiKey: String): List<Noticia> {
+    // Añadimos los argumentos con valores por defecto
+    suspend fun obtenerNoticias(
+        apiKey: String,
+        sources: String? = null,
+        country: String? = null,
+        category: String? = null,
+        query: String? = null
+    ): List<Noticia> {
         return try {
-            // 1. Llamada a la API
+            // Si se especifican sources, ignoramos country y category
+            val finalCountry = if (!sources.isNullOrBlank()) null else country
+            val finalCategory = if (!sources.isNullOrBlank()) null else category
+
+            // dato por defecto si no hay ni sources ni country
+            val effectiveCountry = if (sources.isNullOrBlank() && finalCountry == null) "us" else finalCountry
+
             val response = apiService.getTopHeadlines(
-                sources = "techcrunch",
-                apiKey = apiKey
+                apiKey = apiKey,
+                sources = sources?.ifBlank { null },
+                country = effectiveCountry,
+                category = finalCategory?.ifBlank { null },
+                query = query?.ifBlank { null }
             )
-            // 2. Depuración (opcional)
-            println("Llamada exitosa. Status: ${response.status}, Total: ${response.totalResults}")
-            println("Primer artículo: ${response.articles.firstOrNull()?.title}")
-            // 3. Validar respuesta
+
             if (response.status != "ok" || response.articles.isEmpty()) {
-                throw Exception("Respuesta vacía: status=${response.status}, total=${response.totalResults}")
+                if (response.status == "error") throw Exception("Error API")
             }
-            // 4. Sanitizar URLs (¡clave para evitar errores en Room!)
+
             val noticiasSanitizadas = response.articles.map { noticia ->
                 noticia.copy(
                     url = noticia.url.trim(),
                     urlToImage = noticia.urlToImage?.trim()
                 )
             }
-            // 5. Guardar en Room
+
             noticiaDao.borrarTodas()
             noticiaDao.insertar(noticiasSanitizadas)
-            // 6. Devolver datos limpios
             noticiasSanitizadas
+
         } catch (e: Exception) {
-            // 7. Fallback a caché solo si hay datos guardados
             val cached = noticiaDao.obtenerTodas().first()
             if (cached.isNotEmpty()) {
-                println("Usando caché tras error: ${e.message}")
-                return cached
+                cached
             } else {
-                println("Error crítico (sin caché): ${e.message}")
-                throw e // Relanzar si no hay datos locales
+                throw e
             }
         }
     }
